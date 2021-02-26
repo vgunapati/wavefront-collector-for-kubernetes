@@ -166,6 +166,18 @@ httpConfig:
 source: <string>
 ```
 
+To scrape a [prometheus federated endpoint](https://prometheus.io/docs/prometheus/latest/federation/), you can pass match paramters using url queries parameters in the url of the prometheus source.
+
+For example, to run a promql query like: `workqueue_retries_total{job=~"apiserver"}`, it would look like this: 
+
+```yaml
+prometheus_sources:
+  - url: '<prometheus-url>/federate?match[]=workqueue_retries_total{job=~"apiserver"}'
+    prefix: 'kubernetes.federated.'
+  - url: '<prometheus-url>/federate?match[]=workqueue_retries_total{job=~"apiserver"}&match[]={job=~"kubelet"}'
+    prefix: 'kubernetes.federated.'
+```
+
 ### telegraf_source
 ```yaml
 # The list of plugins to be enabled. Empty list defaults to enabling all host plugins.
