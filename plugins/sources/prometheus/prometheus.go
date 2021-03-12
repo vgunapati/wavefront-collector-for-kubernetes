@@ -155,18 +155,17 @@ func (src *prometheusMetricsSource) ScrapeMetrics() (*metrics.DataBatch, error) 
 		return nil, fmt.Errorf("error retrieving prometheus metrics from %s", src.metricsURL)
 	}
 
-	body, err := readResponse(resp.Body, resp.ContentLength)
-	if err != nil {
-		collectErrors.Inc(1)
-		src.eps.Inc(1)
-		return nil, err
-	}
-
 	var points []*metrics.MetricPoint
 	if src.classicProcessing {
+		body, err := readResponse(resp.Body, resp.ContentLength)
+		if err != nil {
+			collectErrors.Inc(1)
+			src.eps.Inc(1)
+			return nil, err
+		}
 		points, err = src.parseMetricsAllAtOnce(body)
 	} else {
-		points, err = src.parseMetrics(body)
+		points, err = src.parseMetrics(resp.Body, resp.ContentLength)
 	}
 
 	if err != nil {
@@ -209,9 +208,8 @@ func (src *prometheusMetricsSource) parseMetricsAllAtOnce(buf []byte) ([]*metric
 	return src.buildPoints(metricFamilies)
 }
 
-func (src *prometheusMetricsSource) parseMetrics(buf []byte) ([]*metrics.MetricPoint, error) {
-
-	metricReader := NewMetricReader(bytes.NewReader(buf))
+func (src *prometheusMetricsSource) parseMetrics(body io.ReadCloser, cLen int64) ([]*metrics.MetricPoint, error) {
+	metricReader := NewMetricReader(body)
 
 	var points = make([]*metrics.MetricPoint, 0)
 	var err error
