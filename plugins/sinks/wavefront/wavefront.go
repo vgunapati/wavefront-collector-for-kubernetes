@@ -5,9 +5,11 @@ package wavefront
 
 import (
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"os"
 	"runtime/debug"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
@@ -219,6 +221,13 @@ func (sink *wavefrontSink) send(batch *metrics.DataBatch) {
 	if after > before {
 		log.WithField("count", after).Warning("Error sending one or more points")
 	}
+
+	file, err := ioutil.TempFile("", "memdump")
+	defer file.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+	pprof.WriteHeapProfile(file)
 
 	if sink.forceGC {
 		log.Info("sink: forcing memory release")

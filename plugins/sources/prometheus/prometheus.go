@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wavefronthq/wavefront-collector-for-kubernetes/internal/configuration"
@@ -55,6 +56,8 @@ type prometheusMetricsSource struct {
 	eps                  gometrics.Counter
 	internalMetricsNames []string
 
+	tagBuilder TagBuilder
+
 	omitBucketSuffix  bool
 	classicProcessing bool
 }
@@ -85,6 +88,7 @@ func NewPrometheusMetricsSource(metricsURL, prefix, source, discovered string, t
 		internalMetricsNames: []string{ppsKey, epsKey},
 		omitBucketSuffix:     omitBucketSuffix,
 		classicProcessing:    classicProcessing,
+		tagBuilder:           TagBuilder{dictionary: make(map[string]*string)},
 	}, nil
 }
 
@@ -209,6 +213,19 @@ func (src *prometheusMetricsSource) parseMetricsAllAtOnce(buf []byte) ([]*metric
 	return src.buildPoints(metricFamilies)
 }
 
+type TagBuilder struct {
+	m          sync.Mutex
+	dictionary map[string]*string
+}
+
+func (b *TagBuilder) Intern(s string) *string {
+	if interned, ok := b.dictionary[s]; ok {
+		return interned
+	}
+	b.dictionary[s] = &s
+	return &s
+}
+
 func (src *prometheusMetricsSource) parseMetrics(buf []byte) ([]*metrics.MetricPoint, error) {
 
 	metricReader := NewMetricReader(bytes.NewReader(buf))
@@ -268,15 +285,16 @@ func (src *prometheusMetricsSource) filterAppend(slice []*metrics.MetricPoint, p
 	// check whether we can avoid creating tags till after filtering.
 	// basically if only metric name based filters are configured on the source
 	// perform the filtering decision first and then create the tags
-	if point.Tags == nil && (src.filters == nil || src.filters.UsesTags()) {
-		point.Tags = src.buildTags(m)
+
+	tags := point.Tags
+	if tags == nil && (src.filters == nil || src.filters.UsesTags()) {
+		tags = src.buildTags(m)
 	}
 
-	if src.isValidMetric(point.Metric, point.Tags) {
+	if src.isValidMetric(point.Metric, tags) {
 		if point.Tags == nil {
 			// skip allocating intermediate maps and pass label pairs and src tags directly to the sink
-			point.Labels = m.Label
-			point.SrcTags = src.tags
+			point.DedupTags = src.dedup(tags)
 		}
 		return append(slice, point)
 	}
@@ -384,6 +402,17 @@ func (src *prometheusMetricsSource) histoName(name string) string {
 	return name + ".bucket"
 }
 
+func (src *prometheusMetricsSource) dedup(tags map[string]string) []metrics.LabelPair {
+	result := make([]metrics.LabelPair, 0)
+	for k, v := range tags {
+		result = append(result, metrics.LabelPair{
+			Name:  src.tagBuilder.Intern(k),
+			Value: src.tagBuilder.Intern(v),
+		})
+	}
+	return result
+}
+
 type prometheusProvider struct {
 	metrics.DefaultMetricsSourceProvider
 	name              string
@@ -424,13 +453,8 @@ func NewPrometheusProvider(cfg configuration.PrometheusSourceConfig) (metrics.Me
 	discovered := configuration.GetStringValue(cfg.Discovered, "")
 	log.Debugf("name: %s discovered: %s", name, discovered)
 
-	httpCfg := cfg.HTTPClientConfig
-	prefix := cfg.Prefix
-	tags := cfg.Tags
-	filters := filter.FromConfig(cfg.Filters)
-
 	var sources []metrics.MetricsSource
-	metricsSource, err := NewPrometheusMetricsSource(cfg.URL, prefix, source, discovered, tags, filters, httpCfg)
+	metricsSource, err := NewPrometheusMetricsSource(cfg.URL, cfg.Prefix, source, discovered, cfg.Tags, filter.FromConfig(cfg.Filters), cfg.HTTPClientConfig)
 	if err == nil {
 		sources = append(sources, metricsSource)
 	} else {

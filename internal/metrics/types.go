@@ -173,6 +173,11 @@ type DataProcessor interface {
 	Process(*DataBatch) (*DataBatch, error)
 }
 
+type LabelPair struct {
+	Name  *string
+	Value *string
+}
+
 // Represents a single point in Wavefront metric format.
 type MetricPoint struct {
 	Metric    string
@@ -180,25 +185,21 @@ type MetricPoint struct {
 	Timestamp int64
 	Source    string
 	Tags      map[string]string
+	//Tags      map[*[]byte]*[]byte  // dedup the strings
+	//Tags      [][]string // attack the map (do we need to do lookups by key? can we just add a linear search on point?)
+	//Tags      [][]*[]byte // attack both (realistically, create a no ugly tuple struct)
 
 	// Embed Prometheus labels directly to avoid memory allocations
 	// Converted to map[string]string at sink export time
 	Labels []*dto.LabelPair
 
-	SrcTags map[string]string
+	SrcTags   map[string]string // actually use this right (didn't seem to help much, though)
+	DedupTags []LabelPair
 }
 
 func (m *MetricPoint) AddCustomTags(tags map[string]string) {
-	for k, v := range m.SrcTags {
-		if len(k) > 0 && len(v) > 0 {
-			tags[k] = v
-		}
-	}
-	for _, label := range m.Labels {
-		k, v := label.GetName(), label.GetValue()
-		if len(k) > 0 && len(v) > 0 {
-			tags[k] = v
-		}
+	for _, labelPair := range m.DedupTags {
+		tags[*labelPair.Name] = *labelPair.Value
 	}
 }
 
